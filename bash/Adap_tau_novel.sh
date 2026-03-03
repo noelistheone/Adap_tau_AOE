@@ -9,8 +9,10 @@ logdir="./log/"
 # temperature="$5"
 n_negs="$5"
 bsz="$6"
-loss_fn="Adap_tau_Loss"
+loss_fn="${18}"
 drop_bool="$7"
+adv_train="${16}"
+adv_lambda="${17}"
 t_1="${8}"
 t_2="${9}"
 sampling_method="${10}"
@@ -38,24 +40,36 @@ then
         echo "start to drop embedding"
         name1="${dataset}_${gnn_name}_mode_${tau_mode}_${sampling_method}_${generate_mode}_TAU_${loss_fn}_${bsz}_${n_negs}_lr_${lr}_l2_${l2}_t1_${t_1}_t2_${t_2}_drop"
         echo $name1
-        CUDA_VISIBLE_DEVICES=$gpus python main.py --name $name1 --dataset $dataset --gnn $gnn --dim 64 --lr $lr \
-                --batch_size $bsz --gpu_id 0 --logdir $logdir \
+        
+        cmd="python main.py --name $name1 --dataset $dataset --gnn $gnn --dim 64 --lr $lr \
+                --batch_size $bsz --gpu_id $gpus --logdir $logdir \
                 --n_negs  $n_negs --l2 $l2 --mess_dropout True --mess_dropout_rate 0.1  \
                 --loss_fn $loss_fn --sampling_method $sampling_method \
-                --generate_mode $generate_mode --u_norm --i_norm --tau_mode $tau_mode\
-                --temperature $t_1 --temperature_2 $t_2 --cnt_lr $cnt --context_hops $context_hops\
-                > ./outputs/${name1}.log
+                --generate_mode $generate_mode --u_norm --i_norm --tau_mode $tau_mode \
+                --temperature $t_1 --temperature_2 $t_2 --cnt_lr $cnt --context_hops $context_hops"
+        
+        if [[ $adv_train == 1 ]] || [[ $adv_train == "adv_train" ]]; then
+            cmd="$cmd --adv_train $adv_train --adv_lambda $adv_lambda"
+        fi
+
+        CUDA_VISIBLE_DEVICES=$gpus $cmd | tee tee ./outputs/${name1}.log
 else
         echo "start to drop embedding"
         name1="${dataset}_${gnn_name}_mode_${tau_mode}_${sampling_method}_${generate_mode}_TAU_${loss_fn}_${bsz}_${n_negs}_lr_${lr}_l2_${l2}_t1_${t_1}_t2_${t_2}_nodrop"
         echo $name1
-        CUDA_VISIBLE_DEVICES=$gpus python main.py --name $name1 --dataset $dataset --gnn $gnn --dim 64 --lr $lr \
-                --batch_size $bsz --gpu_id 0 --logdir $logdir \
+
+        cmd="python main.py --name $name1 --dataset $dataset --gnn $gnn --dim 64 --lr $lr \
+                --batch_size $bsz --gpu_id $gpus --logdir $logdir \
                 --n_negs  $n_negs --l2 $l2  \
                 --loss_fn $loss_fn --sampling_method $sampling_method \
                 --generate_mode $generate_mode --u_norm --i_norm --tau_mode $tau_mode \
-                --temperature $t_1 --temperature_2 $t_2 --cnt_lr $cnt --context_hops $context_hops\
-                > ./outputs/${name1}.log
+                --temperature $t_1 --temperature_2 $t_2 --cnt_lr $cnt --context_hops $context_hops"
+
+        if [[ $adv_train == 1 ]] || [[ $adv_train == "adv_train" ]]; then
+            cmd="$cmd --adv_train $adv_train --adv_lambda $adv_lambda"
+        fi
+        
+        CUDA_VISIBLE_DEVICES=$gpus $cmd | tee tee ./outputs/${name1}.log
 fi
 
 

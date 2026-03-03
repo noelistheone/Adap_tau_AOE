@@ -2,3 +2,4 @@ test
 .ckpt
 log/*
 weights
+output/*

@@ -59,7 +59,7 @@ class MF(nn.Module):
             self.loss_fn = losses.Adap_tau_Loss()
         elif args_config.loss_fn == "SSM_Loss":
             print(self.loss_name)
-            self.loss_fn = losses.SSM_Loss(self._margin, self.temperature, self._negativa_weight, args_config.pos_mode)
+            self.loss_fn = losses.SSM_Loss(temperature=self.temperature_2)
         else:
             raise NotImplementedError("loss={} is not support".format(args_config.loss_fn))
 
@@ -120,7 +120,7 @@ class MF(nn.Module):
         pos_item = batch['pos_items']
         neg_item = batch['neg_items']
 
-        if s == 0 and w_0 is not None:
+        if s == 0 and w_0 is not None and self.loss_name == "Adap_tau_Loss":
             tau_user = self._loss_to_tau(loss_per_user, w_0)
             self._update_tau_memory(tau_user)
          
@@ -173,10 +173,10 @@ class MF(nn.Module):
             mask_zeros = None
             tau = torch.index_select(self.memory_tau, 0, user).detach()
             loss, loss_ = self.loss_fn(y_pred, tau, w_0)
-            return loss.mean() + emb_loss, loss_, emb_loss, tau
+            return loss.mean() + emb_loss, loss_, emb_loss, tau, u_e, pos_e
         elif self.loss_name == "SSM_Loss":
             loss, loss_ = self.loss_fn(y_pred)
-            return loss.mean() + emb_loss, loss_, emb_loss, y_pred
+            return loss.mean() + emb_loss, loss_, emb_loss, y_pred, u_e, pos_e
         else:
             raise NotImplementedError("loss={} is not support".format(self.loss_name))
 

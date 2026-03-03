@@ -9,8 +9,8 @@ from utils.parser import parse_args
 
 import time, json, sys, os
 import logging, logging.config
-from tqdm import tqdm
-from copy import deepcopy
+# from tqdm import tqdm
+# from copy import deepcopy
 import logging
 # from prettytable import PrettyTable
 from torch_scatter import scatter
@@ -170,6 +170,14 @@ if __name__ == '__main__':
     """read args"""
     global args, device, K
     args = parse_args()
+    
+    # 强制调试检查 (DEBUG)
+    if not args.adv_train:
+       # 如果命令行中有 --adv_train，但 args.adv_train 还是 False，
+       # 说明 argparse 可能被某些默认行为覆盖了，或者输入格式不对。
+       # 但通常 action='store_true' 只要出现 flag 就会是 True。
+       pass
+       
     # print(args)
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu_id)
     device = torch.device("cuda:0") if args.cuda else torch.device("cpu")
@@ -194,6 +202,7 @@ if __name__ == '__main__':
     """define model"""
     from modules.MF_tau import MF
     from modules.LGN_tau import lgn_frame
+    from modules.Discriminator import Discriminator
     if args.gnn == 'mf':
         model = MF(n_params, args, norm_mat, logger).to(device)
     elif args.gnn == "lgn":
@@ -215,15 +224,58 @@ if __name__ == '__main__':
         os.makedirs(args.out_dir)
     if not args.restore:
         logger.info("start training ...")
+        
+        # Adversarial Setup
+        discriminator = None
+        optimizer_D = None
+        is_popular = None
+        bce_loss = None
+        if args.adv_train:
+            # Adversarial Setup (Aligned with try/main.py logic)
+            pos_items_all = train_cf[:, 1]
+            item_counts = torch.bincount(pos_items_all, minlength=n_items).float()
+            # Use 0.8 threshold as per original final code, or try's logical equivalent
+            threshold = torch.quantile(item_counts, 0.8) 
+            is_popular = (item_counts > threshold).float().to(device)
+            item_pop_labels_torch = is_popular # Alias for consistency
+            
+            discriminator = Discriminator(args.dim).to(device)
+            optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=args.adv_lr)
+            bce_loss = torch.nn.BCELoss()
+            logger.info("***** Adversarial Training ENABLED *****")
+            logger.info(f"Adv Lambda: {args.adv_lambda}, Adv LR: {args.adv_lr}, Pop Threshold: {threshold}")
+        
         loss_per_user = None
         loss_per_ins = None
         # prepare for tau_0
         pos = train_cf.to(device)
+        # === Modified 1: Adaptive User Filtering Logic ===
+        # 1. Calc interactions
         nu = scatter(torch.ones(len(train_cf), device=device), pos[:, 0], dim=0, reduce='sum')
         nu_thresh = torch.quantile(nu, 0.2)
+        
+        # 2. [Priority] Try original logic (Strictly Greater)
+        # This preserves logic for Gowalla, Yelp2018 etc.
         judgeid_torch = (nu > nu_thresh)
+        
+        # 3. [Check] If original logic yields empty set (patch for new datasets)
+        if judgeid_torch.sum() == 0:
+            logger.info("Warning: Original logic (nu > thresh) found 0 users. Switching to fallback logic (nu >= thresh).")
+            # Fallback 1: Greater or Equal
+            judgeid_torch = (nu >= nu_thresh)
+            
+            # Fallback 2: If still empty (very rare), use ALL
+            if judgeid_torch.sum() == 0:
+                logger.info("Warning: Still 0 users. Using ALL users.")
+                judgeid_torch = torch.ones(n_users, device=device).bool()
+
+        # 4. Generate final indices
         [useid_torch, ] = torch.where(judgeid_torch > 0)
-        [yid_torch ,] = torch.where(judgeid_torch[pos[:,0]]>0)
+        # Must use judgeid_torch to filter corresponding interactions to align with useid_torch
+        active_mask = judgeid_torch[pos[:, 0]]
+        [yid_torch ,] = torch.where(active_mask > 0)
+        
+        logger.info(f"w_0 calculation active users: {len(useid_torch)}, active interactions: {len(yid_torch)}")
 
         for epoch in range(args.epoch):
             train_cf_ = train_cf
@@ -246,27 +298,67 @@ if __name__ == '__main__':
 
                 user_emb_cos = F.normalize(user_emb_cos, dim=-1)
                 item_emb_cos = F.normalize(item_emb_cos, dim=-1)
-
+                
                 pos_scores = (user_emb_cos[pos[:, 0]] * item_emb_cos[pos[:, 1]]).sum(dim=-1)
-                pos_u_torch = pos_scores[yid_torch].mean()
-                # pos_var_torch = pos_scores[yid_torch].var()
+                
+                # === Modified logic for w_0 update ===
+                # Original logic: directly mean()
+                # New dataset protection: if empty, global mean
+                if len(yid_torch) > 0:
+                    pos_u_torch = pos_scores[yid_torch].mean()
+                else:
+                    pos_u_torch = pos_scores.mean()
+
                 ev_mean_torch = item_emb_cos.mean(dim=0, keepdim=True)
-                allu_torch = (user_emb_cos[useid_torch] @ ev_mean_torch.t()).view(-1)
+                
+                if len(useid_torch) > 0:
+                    allu_torch = (user_emb_cos[useid_torch] @ ev_mean_torch.t()).view(-1)
+                else:
+                    allu_torch = (user_emb_cos @ ev_mean_torch.t()).view(-1)
+                    
                 au_torch = allu_torch.mean()
-                can_torch = np.log(len(useid_torch) * n_items)
-                a_torch = 1e-10
-                c_torch = 2 * (np.log(0.5)+can_torch-np.log(len(yid_torch)))
+                
+                # Recompute constant c (need current len)
+                len_use = max(len(useid_torch), 1)
+                len_yid = max(len(yid_torch), 1)
+                
+                can_torch = np.log(len_use * n_items)
+                c_torch = 2 * (np.log(0.5) + can_torch - np.log(len_yid))
+                
                 b_torch = - (pos_u_torch - au_torch)
-                # w_torch = c_torch / (-2 * b_torch)
-                w_0 = c_torch / (-2 * b_torch)
+                
+                # Protection for zero denominator
+                denom = -2 * b_torch
+                if abs(denom) < 1e-9:
+                    denom = 1e-9
+                
+                w_0 = c_torch / denom
                 logger.info("current w_0 is {}".format(w_0.item()))
+
             else:
-                can = np.log(len(useid_torch) * n_items);
-                a = 1e-10;
-                c = 2 * (np.log(0.5) + can - np.log(len(yid_torch)))
-                print(c / 2)
+                # === Initial w_0 calculation ===
+                # Only check for 0 len
+                if len(useid_torch) == 0 or len(yid_torch) == 0:
+                     len_use = max(len(useid_torch), 1)
+                     len_yid = max(len(yid_torch), 1)
+                else:
+                     # Original len
+                     len_use = len(useid_torch)
+                     len_yid = len(yid_torch)
+
+                can = np.log(len_use * n_items)
+                a = 1e-10
+                # Formula remains same
+                c = 2 * (np.log(0.5) + can - np.log(len_yid))
+                
                 b = - 0.7
-                w_0 = ( - b - np.sqrt(np.clip(b ** 2 - a*c , 0, 100000))) / a
+                delta = b ** 2 - a * c
+                
+                # Only clip if negative
+                if delta < 0:
+                    delta = 0
+                
+                w_0 = ( - b - np.sqrt(delta)) / a
                 logger.info("current w_0 is {}".format(w_0))
                     # loss_per_user = scatter(losses_train, train_cf_[:, 0], dim=0, reduce='mean')
 
@@ -277,9 +369,24 @@ if __name__ == '__main__':
                                       s, s + args.batch_size,
                                       n_negs)
 
-                batch_loss, train_loss, emb_loss, tau = model(batch, loss_per_user=loss_per_user, w_0=w_0, s=s)
+                batch_loss, train_loss, emb_loss, tau, u_e, pos_e = model(batch, loss_per_user=loss_per_user, w_0=w_0, s=s)
                 tau_maxs.append(tau.max().item())
                 tau_mins.append(tau.min().item())
+                
+                if args.adv_train:
+                    optimizer_D.zero_grad()
+                    interaction = (u_e * pos_e).detach()
+                    real_labels = is_popular[batch['pos_items']]
+                    pred_labels = discriminator(interaction).squeeze()
+                    loss_d = bce_loss(pred_labels, real_labels)
+                    loss_d.backward()
+                    optimizer_D.step()
+
+                    interaction_grad = u_e * pos_e
+                    pred_adv = discriminator(interaction_grad).squeeze()
+                    loss_adv = bce_loss(pred_adv, 1 - real_labels)
+                    batch_loss = batch_loss + args.adv_lambda * loss_adv
+
                 losses_emb.append(emb_loss.item())
                 losses_train.append(train_loss)
                 optimizer.zero_grad()
@@ -294,9 +401,30 @@ if __name__ == '__main__':
                 batch = sample.get_feed_dict_reset(train_cf_,
                                       user_dict['train_user_set'],
                                       s, n_negs)
-                batch_loss, train_loss, emb_loss, tau = model(batch, loss_per_user=loss_per_user, w_0=w_0, s=s)
+                batch_loss, train_loss, emb_loss, tau, u_e, pos_e = model(batch, loss_per_user=loss_per_user, w_0=w_0, s=s)
                 tau_maxs.append(tau.max().item())
                 tau_mins.append(tau.min().item())
+                
+                if args.adv_train:
+                    # Explicit interaction calculation
+                    interaction = u_e * pos_e
+                    
+                    # Align shapes: [B, 1] for BCE Loss
+                    batch_labels = is_popular[batch['pos_items']].view(-1, 1)
+                    
+                    # 1. Train Discriminator
+                    optimizer_D.zero_grad()
+                    d_out = discriminator(interaction.detach())
+                    loss_d = bce_loss(d_out, batch_labels)
+                    loss_d.backward()
+                    optimizer_D.step()
+
+                    # 2. Train Recommender (Generator)
+                    flipped_labels = 1.0 - batch_labels
+                    d_out_g = discriminator(interaction)
+                    loss_adv = bce_loss(d_out_g, flipped_labels)
+                    batch_loss = batch_loss + args.adv_lambda * loss_adv
+
                 losses_emb.append(emb_loss.item())
                 losses_train.append(train_loss)
                 optimizer.zero_grad()
@@ -343,7 +471,7 @@ if __name__ == '__main__':
     # logger.info('Test result: NDCG@20: {:.4} Recall@20: {:.4}'.format(test_ret[0], test_ret[1]))
     print_result = '\n'
     for k in args.Ks:
-        print_result += 'TEST \t N@{}: {:.4}, R@{}: {:.4}, P@{}: {:.4}\n'.format(
+        print_result += 'TEST \t N@{}: {:.8f}, R@{}: {:.8f}, P@{}: {:.8f}\n'.format(
             k, test_ret[0][k-1], k, test_ret[1][k-1], k, test_ret[2][k-1])
     logger.info(print_result)
 
