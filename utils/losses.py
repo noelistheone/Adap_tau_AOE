@@ -30,12 +30,9 @@ class Adap_tau_Loss(nn.Module):
         return loss, loss_
 
 class SSM_Loss(nn.Module):
-    def __init__(self, margin=0, temperature=1., negative_weight=None, pos_mode=None):
+    def __init__(self, temperature=1.0):
         super(SSM_Loss, self).__init__()
-        self._margin = margin 
         self._temperature = temperature
-        self._negative_weight = negative_weight
-        self.pos_mode = pos_mode
         print("Here is SSM LOSS: tau is {}".format(self._temperature))
 
     def forward(self, y_pred):
@@ -50,6 +47,6 @@ class SSM_Loss(nn.Module):
 
         loss = (- torch.log(pos_logits / Ng))
         
-        return loss, 0.
+        return loss, loss.detach()
 
 

@@ -47,5 +47,10 @@ def parse_args():
     parser.add_argument('--generate_mode', type=str, default="normal", help="generate_mode")
     parser.add_argument('--tau_mode', type=str, default="static", help='method for calculate tau')
     parser.add_argument('--cnt_lr', type=int, default=10, help='epochs for warm-up')
+
+    # ===== adversarial popularity unlearning ===== #
+    parser.add_argument('--adv_train', type=int, default=0, help='Enable adversarial popularity unlearning (1 for Yes, 0 for No)')
+    parser.add_argument('--adv_lambda', type=float, default=0.1, help='Weight for adversarial loss')
+    parser.add_argument('--adv_lr', type=float, default=1e-3, help='Discriminator learning rate')
     
     return parser.parse_args()

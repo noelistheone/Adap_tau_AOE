@@ -137,7 +137,7 @@ def load_data(model_args, logger):
     dataset = args.dataset
     directory = args.data_path + dataset + '/'
 
-    if dataset == 'yelp2018' or dataset == "amazon-book" or dataset == "gowalla" or dataset == 'ml' or dataset == "citeulike-new" or dataset == "ali-new":
+    if dataset == 'yelp2018' or dataset == "amazon-book" or dataset == "gowalla" or dataset == 'ml' or dataset == "citeulike-new" or dataset == "ali-new"or dataset == "iFashion" or dataset == "amazon-kindle" or dataset == "douban-book" or dataset == 'delicious' or dataset == 'lastfm' or dataset == 'amazon-beauty':
         read_cf = read_cf_yelp2018
     else:
         read_cf = read_cf_amazon
@@ -146,7 +146,7 @@ def load_data(model_args, logger):
     train_cf = read_cf(directory + 'train.txt')
     logger.info("load train.txt")
     test_cf = read_cf(directory + 'test.txt')
-    if dataset == 'yelp2018' or dataset == "amazon-book" or dataset == "gowalla" or dataset == 'ml' or dataset == "citeulike-new":
+    if dataset == 'yelp2018' or dataset == "amazon-book" or dataset == "gowalla" or dataset == 'ml' or dataset == "citeulike-new"or dataset == "iFashion" or dataset == "amazon-kindle" or dataset == "douban-book" or dataset == 'delicious' or dataset == 'lastfm' or dataset == 'amazon-beauty':
         valid_cf = test_cf
     else:
         valid_cf = read_cf(directory + 'valid.txt')
