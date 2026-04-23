@@ -1,8 +1,3 @@
-'''
-Created on March 1st, 2023
-
-@author: Junkang Wu (jkwu0909@gmail.com)
-'''
 from tarfile import POSIX_MAGIC
 from numpy.core.fromnumeric import size
 import torch
@@ -16,9 +11,6 @@ from utils import losses
 from scipy.special import lambertw
 
 class GraphConv(nn.Module):
-    """
-    Graph Convolutional Network
-    """
     def __init__(self, n_hops, n_users, interact_mat,
                  edge_dropout_rate=0.5, mess_dropout_rate=0.1):
         super(GraphConv, self).__init__()
@@ -29,7 +21,7 @@ class GraphConv(nn.Module):
         self.edge_dropout_rate = edge_dropout_rate
         self.mess_dropout_rate = mess_dropout_rate
 
-        self.dropout = nn.Dropout(p=mess_dropout_rate)  # mess dropout
+        self.dropout = nn.Dropout(p=mess_dropout_rate)
 
     def _sparse_dropout(self, x, rate=0.5):
         noise_shape = x._nnz()
@@ -48,10 +40,6 @@ class GraphConv(nn.Module):
 
     def forward(self, user_embed, item_embed,
                 mess_dropout=True, edge_dropout=True):
-        # user_embed: [n_users, channel]
-        # item_embed: [n_items, channel]
-
-        # all_embed: [n_users+n_items, channel]
         all_embed = torch.cat([user_embed, item_embed], dim=0)
         agg_embed = all_embed
         embs = [all_embed]
@@ -64,9 +52,8 @@ class GraphConv(nn.Module):
             agg_embed = torch.sparse.mm(interact_mat, agg_embed)
             if mess_dropout:
                 agg_embed = self.dropout(agg_embed)
-            # agg_embed = F.normalize(agg_embed)
             embs.append(agg_embed)
-        embs = torch.stack(embs, dim=1)  # [n_entity, n_hops+1, emb_size]
+        embs = torch.stack(embs, dim=1)
         return embs[:self.n_users, :], embs[self.n_users:, :]
 
 class lgn_frame(nn.Module):
@@ -89,23 +76,22 @@ class lgn_frame(nn.Module):
         self.edge_dropout_rate = args_config.edge_dropout_rate
         self.pool = args_config.pool
         self.n_negs = args_config.n_negs
-      
+
         self.temperature = args_config.temperature
         self.temperature_2 = args_config.temperature_2
-      
+
         self.device = torch.device("cuda:0") if args_config.cuda else torch.device("cpu")
-       
-        # param for norm
+
         self.u_norm = args_config.u_norm
         self.i_norm = args_config.i_norm
         self.tau_mode = args_config.tau_mode
-       
+
         self._init_weight()
         self.user_embed = nn.Parameter(self.user_embed)
         self.item_embed = nn.Parameter(self.item_embed)
-       
+
         self.loss_name = args_config.loss_fn
-    
+
         self.generate_mode = args_config.generate_mode
 
         if args_config.loss_fn == "Adap_tau_Loss":
@@ -118,7 +104,7 @@ class lgn_frame(nn.Module):
             self.loss_fn = losses.SSM_Loss(temperature=self.temperature_2)
         else:
             raise NotImplementedError("loss={} is not support".format(args_config.loss_fn))
-        
+
         self.register_buffer("memory_tau", torch.full((self.n_users,), 1 / 0.10))
         self.gcn = self._init_model()
         self.sampling_method = args_config.sampling_method
@@ -143,8 +129,6 @@ class lgn_frame(nn.Module):
         return torch.sparse.FloatTensor(i, v, coo.shape)
 
     def _update_tau_memory(self, x):
-        # x: std [B]
-        # y: update position [B]
         with torch.no_grad():
             x = x.detach()
             self.memory_tau = x
@@ -182,9 +166,7 @@ class lgn_frame(nn.Module):
                                               self.item_embed,
                                               edge_dropout=self.edge_dropout,
                                               mess_dropout=self.mess_dropout)
-        # neg_item = batch['neg_items']  # [batch_size, n_negs * K]
         if s == 0 and w_0 is not None and self.loss_name == "Adap_tau_Loss":
-            # self.logger.info("Start to adjust tau with respect to users")
             tau_user = self._loss_to_tau(loss_per_user, w_0)
             self._update_tau_memory(tau_user)
         if self.sampling_method == "no_sample":
@@ -192,17 +174,16 @@ class lgn_frame(nn.Module):
         else:
             neg_item = batch['neg_items']
             return self.Uniform_loss(user_gcn_emb[user], item_gcn_emb[pos_item], item_gcn_emb[neg_item], user, w_0)
-       
+
 
     def pooling(self, embeddings):
-        # [-1, n_hops, channel]
         if self.pool == 'mean':
             return embeddings.mean(dim=-2)
         elif self.pool == 'sum':
             return embeddings.sum(dim=-2)
         elif self.pool == 'concat':
             return embeddings.view(embeddings.shape[0], -1)
-        else:  # final
+        else:
             return embeddings[:, -1, :]
 
     def gcn_emb(self):
@@ -222,9 +203,8 @@ class lgn_frame(nn.Module):
         if self.generate_mode == "cosine":
             user_gcn_emb = F.normalize(user_gcn_emb, dim=-1)
             item_gcn_emb = F.normalize(item_gcn_emb, dim=-1)
-                
+
         elif self.generate_mode == "reweight":
-            # reweight focus on items
             item_norm = torch.norm(item_gcn_emb, p=2, dim=-1)
             mean_norm = item_norm.mean()
             item_gcn_emb = item_gcn_emb / item_norm.unsqueeze(1)  * mean_norm * self.reweight.unsqueeze(1)
@@ -236,24 +216,22 @@ class lgn_frame(nn.Module):
     def rating(self, u_g_embeddings=None, i_g_embeddings=None):
         return torch.matmul(u_g_embeddings, i_g_embeddings.t())
 
-    # 对比训练loss，仅仅计算角度
     def Uniform_loss(self, user_gcn_emb, pos_gcn_emb, neg_gcn_emb, user, w_0=None):
         batch_size = user_gcn_emb.shape[0]
-        u_e = self.pooling(user_gcn_emb)  # [B, F]
-        pos_e = self.pooling(pos_gcn_emb) # [B, F]
-        neg_e = self.pooling(neg_gcn_emb) # [B, M, F]
+        u_e = self.pooling(user_gcn_emb)
+        pos_e = self.pooling(pos_gcn_emb)
+        neg_e = self.pooling(neg_gcn_emb)
 
-        item_e = torch.cat([pos_e.unsqueeze(1), neg_e], dim=1) # [B, M+1, F]
+        item_e = torch.cat([pos_e.unsqueeze(1), neg_e], dim=1)
         if self.u_norm:
             u_e = F.normalize(u_e, dim=-1)
         if self.i_norm:
             item_e = F.normalize(item_e, dim=-1)
 
-        y_pred = torch.bmm(item_e, u_e.unsqueeze(-1)).squeeze(-1) # [B M+1]
-        # cul regularizer
+        y_pred = torch.bmm(item_e, u_e.unsqueeze(-1)).squeeze(-1)
         regularize = (torch.norm(user_gcn_emb[:, :]) ** 2
                        + torch.norm(pos_gcn_emb[:, :]) ** 2
-                       + torch.norm(neg_gcn_emb[:, :, :]) ** 2) / 2  # take hop=0
+                       + torch.norm(neg_gcn_emb[:, :, :]) ** 2) / 2
         emb_loss = self.decay * regularize / batch_size
 
         if self.loss_name == "Adap_tau_Loss":
@@ -270,22 +248,20 @@ class lgn_frame(nn.Module):
 
     def NO_Sample_Uniform_loss(self, user_gcn_emb, pos_gcn_emb, user, w_0=None):
         batch_size = user_gcn_emb.shape[0]
-        u_e = self.pooling(user_gcn_emb)  # [B, F]
-        pos_e = self.pooling(pos_gcn_emb) # [B, F]
+        u_e = self.pooling(user_gcn_emb)
+        pos_e = self.pooling(pos_gcn_emb)
 
         if self.u_norm:
             u_e = F.normalize(u_e, dim=-1)
         if self.i_norm:
             pos_e = F.normalize(pos_e, dim=-1)
-        # contrust y_pred framework
         row_swap = torch.cat([torch.arange(batch_size).long(), torch.arange(batch_size).long()]).to(self.device)
         col_before = torch.cat([torch.arange(batch_size).long(), torch.zeros(batch_size).long()]).to(self.device)
         col_after = torch.cat([torch.zeros(batch_size).long(), torch.arange(batch_size).long()]).to(self.device)
         y_pred = torch.mm(u_e, pos_e.t().contiguous())
         y_pred[row_swap, col_before] = y_pred[row_swap, col_after]
-        # cul regularizer
         regularize = (torch.norm(user_gcn_emb[:, :]) ** 2
-                       + torch.norm(pos_gcn_emb[:, :]) ** 2) / 2  # take hop=0
+                       + torch.norm(pos_gcn_emb[:, :]) ** 2) / 2
         emb_loss = self.decay * regularize / batch_size
 
         if self.loss_name == "Adap_tau_Loss":
@@ -304,5 +280,4 @@ def get_negative_mask(batch_size):
     for i in range(batch_size):
         negative_mask[i, i] = 0
 
-    # negative_mask = torch.cat((negative_mask, negative_mask), 0)
     return negative_mask

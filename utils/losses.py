@@ -8,21 +8,14 @@ class Adap_tau_Loss(nn.Module):
         super(Adap_tau_Loss, self).__init__()
 
     def forward(self, y_pred, temperature_, w_0):
-        """
-        :param y_true: Labels
-        :param y_pred: Predicted result.
-        """
-        pos_logits = torch.exp(y_pred[:, 0] *  w_0)  #  B
-        neg_logits = torch.exp(y_pred[:, 1:] * temperature_.unsqueeze(1))  # B M
-        # neg_logits = torch.where(y_pred[:, 1:] > self._margin, neg_logits, mask_zeros)
+        pos_logits = torch.exp(y_pred[:, 0] *  w_0)
+        neg_logits = torch.exp(y_pred[:, 1:] * temperature_.unsqueeze(1))
 
         Ng = neg_logits.sum(dim=-1)
 
         loss = (- torch.log(pos_logits / Ng))
-        # log out
-        pos_logits_ = torch.exp(y_pred[:, 0])  #  B
-        neg_logits_ = torch.exp(y_pred[:, 1:])  # B M
-        # neg_logits = torch.where(y_pred[:, 1:] > self._margin, neg_logits, mask_zeros)
+        pos_logits_ = torch.exp(y_pred[:, 0])
+        neg_logits_ = torch.exp(y_pred[:, 1:])
 
         Ng_ = neg_logits_.sum(dim=-1)
 
@@ -36,17 +29,11 @@ class SSM_Loss(nn.Module):
         print("Here is SSM LOSS: tau is {}".format(self._temperature))
 
     def forward(self, y_pred):
-        """
-        :param y_true: Labels
-        :param y_pred: Predicted result.
-        """
-        pos_logits = torch.exp(y_pred[:, 0] / self._temperature)  #  B
-        neg_logits = torch.exp(y_pred[:, 1:] / self._temperature)  # B M
+        pos_logits = torch.exp(y_pred[:, 0] / self._temperature)
+        neg_logits = torch.exp(y_pred[:, 1:] / self._temperature)
 
         Ng = neg_logits.sum(dim=-1)
 
         loss = (- torch.log(pos_logits / Ng))
-        
+
         return loss, loss.detach()
-
-

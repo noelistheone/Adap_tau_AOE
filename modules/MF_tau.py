@@ -1,8 +1,3 @@
-'''
-Created on March 1st, 2023
-
-@author: Junkang Wu (jkwu0909@gmail.com)
-'''
 from tarfile import POSIX_MAGIC
 from numpy.core.fromnumeric import size
 import torch
@@ -40,18 +35,15 @@ class MF(nn.Module):
         self.temperature_2 = args_config.temperature_2
 
         self.device = torch.device("cuda:0") if args_config.cuda else torch.device("cpu")
-     
-        # param for norm
+
         self.u_norm = args_config.u_norm
         self.i_norm = args_config.i_norm
         self.tau_mode = args_config.tau_mode
-        # init  setting
         self._init_weight()
         self.user_embed = nn.Parameter(self.user_embed)
         self.item_embed = nn.Parameter(self.item_embed)
         self.loss_name = args_config.loss_fn
         self.generate_mode = args_config.generate_mode
-        # define loss function
         if args_config.loss_fn == "Adap_tau_Loss":
             print(self.loss_name)
             print("start to make tables")
@@ -71,23 +63,9 @@ class MF(nn.Module):
         self.item_embed = initializer(torch.empty(self.n_items, self.emb_size))
 
     def _update_tau_memory(self, x):
-        # x: std [B]
-        # y: update position [B]
         with torch.no_grad():
             x = x.detach()
             self.memory_tau = x
-
-    # def _loss_to_tau(self, x, x_all):
-    #     t_0 = x_all
-    #     if x is None:
-    #         tau = t_0 * torch.ones_like(self.memory_tau, device=self.device)
-    #     else:
-    #         base_laberw = torch.mean(x)
-    #         laberw_data = torch.clamp((x - base_laberw) / self.temperature_2,
-    #                                 min=-np.e ** (-1), max=1000)
-    #         laberw_data = self.lambertw_table[((laberw_data + 1) * 1e4).long()]
-    #         tau = (t_0 * torch.exp(-laberw_data)).detach()
-    #     return tau
 
     def _loss_to_tau(self, x, x_all):
         if self.tau_mode == "weight_v0":
@@ -114,7 +92,7 @@ class MF(nn.Module):
                 laberw_data = self.lambertw_table[((laberw_data + 1) * 1e4).long()]
                 tau = (t_0 * torch.exp(-laberw_data)).detach()
         return tau
-    
+
     def forward(self, batch=None, loss_per_user=None, w_0=None, s=0):
         user = batch['users']
         pos_item = batch['pos_items']
@@ -123,14 +101,13 @@ class MF(nn.Module):
         if s == 0 and w_0 is not None and self.loss_name == "Adap_tau_Loss":
             tau_user = self._loss_to_tau(loss_per_user, w_0)
             self._update_tau_memory(tau_user)
-         
+
         return self.Uniform_loss(self.user_embed[user], self.item_embed[pos_item], self.item_embed[neg_item], user, w_0)
 
     def gcn_emb(self):
         user_gcn_emb, item_gcn_emb = self.user_embed, self.item_embed
-        # user_gcn_emb, item_gcn_emb = self.pooling(user_gcn_emb), self.pooling(item_gcn_emb)
         return user_gcn_emb.detach(), item_gcn_emb.detach()
-    
+
     def generate(self, mode='test', split=True):
         user_gcn_emb = self.user_embed
         item_gcn_emb = self.item_embed
@@ -147,26 +124,24 @@ class MF(nn.Module):
     def rating(self, u_g_embeddings=None, i_g_embeddings=None):
         return torch.matmul(u_g_embeddings, i_g_embeddings.t())
 
-    # 对比训练loss，仅仅计算角度
     def Uniform_loss(self, user_gcn_emb, pos_gcn_emb, neg_gcn_emb, user, w_0=None):
         batch_size = user_gcn_emb.shape[0]
-        u_e = user_gcn_emb  # [B, F]
+        u_e = user_gcn_emb
         if self.mess_dropout:
             u_e = self.dropout(u_e)
-        pos_e = pos_gcn_emb # [B, F]
-        neg_e = neg_gcn_emb # [B, M, F]
+        pos_e = pos_gcn_emb
+        neg_e = neg_gcn_emb
 
-        item_e = torch.cat([pos_e.unsqueeze(1), neg_e], dim=1) # [B, M+1, F]
+        item_e = torch.cat([pos_e.unsqueeze(1), neg_e], dim=1)
         if self.u_norm:
             u_e = F.normalize(u_e, dim=-1)
         if self.i_norm:
             item_e = F.normalize(item_e, dim=-1)
 
-        y_pred = torch.bmm(item_e, u_e.unsqueeze(-1)).squeeze(-1) # [B M+1]
-        # cul regularizer
+        y_pred = torch.bmm(item_e, u_e.unsqueeze(-1)).squeeze(-1)
         regularize = (torch.norm(user_gcn_emb[:, :]) ** 2
                        + torch.norm(pos_gcn_emb[:, :]) ** 2
-                       + torch.norm(neg_gcn_emb[:, :, :]) ** 2) / 2  # take hop=0
+                       + torch.norm(neg_gcn_emb[:, :, :]) ** 2) / 2
         emb_loss = self.decay * regularize / batch_size
 
         if self.loss_name == "Adap_tau_Loss":
@@ -185,5 +160,4 @@ def get_negative_mask(batch_size):
     for i in range(batch_size):
         negative_mask[i, i] = 0
 
-    # negative_mask = torch.cat((negative_mask, negative_mask), 0)
     return negative_mask
